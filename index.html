@@ -25,7 +25,7 @@ body {
   min-height: 100vh;
 }
 #app { max-width: 1100px; margin: 0 auto; padding: 24px 16px 90px; }
-button { font-family: inherit; cursor: pointer; transition: all .18s ease; }
+button { font-family: inherit; cursor: pointer; transition: background .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease, opacity .18s ease, filter .18s ease; }
 ::selection { background: rgba(198,160,246,0.35); }
 
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -1126,9 +1126,11 @@ textarea.inp { resize: vertical; font-family: inherit; line-height: 1.5; }
   .tipcard { width: min(240px, 74vw); }
 
   /* gyűjtemény / kártyák / ládák */
-  .tkartya { width: min(200px, 56vw); }
-  .tkartya.small, .arenahandcard .tkartya.small { width: 116px; }
-  .albumlocked, .arenafacedown { width: 116px; }
+  .tkartya { width: min(200px, 58vw); }
+  .tkartya.small { width: min(160px, 43vw); }
+  .arenahandcard .tkartya.small { width: 116px; }
+  .albumlocked { width: min(160px, 43vw); }
+  .arenafacedown { width: 116px; }
   .chestscene { width: 180px; height: 180px; }
   .chestpieceimg { width: 100px; height: 100px; }
   .chestcharmwrap { width: 108px; height: 108px; }
@@ -1190,6 +1192,67 @@ textarea.inp { resize: vertical; font-family: inherit; line-height: 1.5; }
   .tourstatgrid { grid-template-columns: 1fr 1fr; }
   .tourpodbar { width: 68px; }
   .tournewspaper { display: none !important; }
+
+  /* ===== TELJESÍTMÉNY telefonon ===== */
+  /* a fixált háttér minden görgetésnél teljes újrarajzolást kényszerít - telefonon sima marad */
+  body { background-attachment: scroll; -webkit-tap-highlight-color: transparent; }
+  /* a backdrop-blur a középkategóriás mobil GPU-k leglassabb művelete - kikapcsoljuk,
+     helyette kicsit tömörebb hátterek adják ugyanazt a hatást */
+  .tabs, .card, .entrycard, .limitbar, .toast, .acctpanel, .tipcard,
+  .overlay, .modal, .chestov, .tourviewer, .arenaCardPeek {
+    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  }
+  .card { background: rgba(33,35,50,0.97); box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+  .entrycard { background: rgba(33,35,50,0.97); }
+  .entrycard.hasimg { background: rgba(24,26,40,0.98); }
+  .limitbar.over { background: rgba(64,36,42,0.96); }
+  .limitbar.near { background: rgba(58,52,36,0.96); }
+  .modal { background: #1e2030; }
+  .toast { background: #2a2c3c; }
+  /* dísz-animációk (fólia, csillámok, hó, parázs, buborék, hullám) kikapcsolva a KIS kártyákon -
+     album/gyűjtemény nézetben tucatnyi fut belőlük egyszerre; a nagy részletnézet változatlanul látványos */
+  .tkartya.small .tksparkles, .tkartya.small .tksnowflakes, .tkartya.small .tkembers,
+  .tkartya.small .tkbubbles, .tkartya.small .tkoozebubbles, .tkartya.small .tkwaves,
+  .tkartya.small .tkshine { display: none; }
+  .tkartya.small .tkfoil, .tkartya.small .tkname, .tkartya.small .tkcharm { animation: none !important; }
+  .tkartya.small .tkhead { filter: none; }
+  .tkstatpanel.small .tkradar { filter: none; }
+  .albumnewbadge { animation: none; }
+  /* képernyőn kívüli kártyák kihagyása a renderelésből */
+  .kartyaslot { content-visibility: auto; contain-intrinsic-size: 160px 224px; }
+  .albumslot { contain-intrinsic-size: 160px 224px; }
+
+  /* ===== KÁRTYÁK telefonon ===== */
+  /* statpanel + kártya egymás mellett nem fér el - a panel a kártya ALÁ kerül, fekvő elrendezésben */
+  .tkrow { flex-direction: column-reverse; align-items: center; gap: 10px; }
+  .cardviewbox .tkrow { align-items: center; }
+  .tkrow .tkstatpanel { flex-direction: row; align-items: center; justify-content: center; gap: 12px; width: min(300px, 92vw); }
+  .tkrow .tkstatpanel .tkstatlist { flex: 0 1 150px; }
+  /* album és mentett kártyák: kényelmes 2 oszlopos rács, a rácsban csak a kártya látszik -
+     a statok koppintásra, a nagy részletnézetben jönnek elő */
+  .albumgrid, .kartyagrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 10px; justify-items: center; padding: 14px 8px; }
+  .albumgrid .tkstatpanel, .kartyagrid .tkstatpanel { display: none; }
+  .albumgrid .tkrow, .kartyagrid .tkrow { gap: 0; }
+  .albumpage { padding: 12px 10px 14px; }
+  /* kártyakészítő: az élő előnézet ne ragadjon, kerüljön középre a form alá */
+  .kartyawrap { gap: 16px; }
+  .kartyapreviewcol { position: static; width: 100%; align-items: center; }
+
+  /* ===== MODÁLOK telefonon: alulról felcsúszó lap ===== */
+  .overlay { align-items: flex-end; padding: 0; }
+  .modal { max-width: none; border-radius: 22px 22px 0 0; max-height: 88vh;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    animation: sheetIn .28s cubic-bezier(.22,1,.36,1); }
+  @keyframes sheetIn { from { transform: translateY(46px); opacity: .55; } to { transform: none; opacity: 1; } }
+}
+
+/* érintőképernyőn nincs valódi hover - a "beragadó" lebegő effektek kikapcsolva */
+@media (hover: none) {
+  .entrycard:hover { transform: none; box-shadow: none; border-color: rgba(255,255,255,0.06); }
+  .entrycard.nowcard:hover { box-shadow: inset 3px 0 0 #C6A0F6, 0 0 20px rgba(198,160,246,0.08); }
+  .albumslot:hover, .kartyaslot:hover { transform: none; filter: none; }
+  .navbtn:hover, .minibtn:hover, .fab:hover { transform: none; }
+  .pocketpiece:hover { transform: none; }
 }
 </style>
 </head>
