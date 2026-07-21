@@ -1188,6 +1188,21 @@ textarea.inp { resize: vertical; font-family: inherit; line-height: 1.5; }
   .ar2rankbar { min-width: 90px; }
 
   /* bajnokság: ágrajz vízszintes görgetéssel, statok szűkebben */
+  /* fiókpanel: eddig a fejléc-gombhoz "absolute" pozícióval igazodott (right:0, 230px),
+     de a fejléc flex-wrap-je miatt a gomb pozíciója nem kiszámítható mobilon - emiatt a
+     panel néha kilógott a képernyő bal széléről, és a rossz helyen megjelenő gombra
+     (pl. Kijelentkezés) lehetett rákattintani fiókváltás helyett. Fixed, teljes szélességű
+     alulról nyíló lap old meg ezt, mindig középre/képernyőhöz igazodva.
+  */
+  .acctpanel {
+    position: fixed; top: auto; left: 0; right: 0; bottom: 0; width: 100%;
+    max-height: 78vh; overflow-y: auto; border-radius: 22px 22px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    animation: sheetIn .25s cubic-bezier(.22,1,.36,1);
+  }
+  .acctitem { padding: 12px 14px; }
+  .acctitem .acctswitch { font-size: 13px; padding: 4px 2px; }
+
   .tourbracket { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 8px; }
   .tourstatgrid { grid-template-columns: 1fr 1fr; }
   .tourpodbar { width: 68px; }
@@ -1384,6 +1399,13 @@ const cloud = {
   },
 };
 cloud.init();
+// minden helyi kulcsot (naptár, kártyák, csüngők, aréna, torna, minden fiók) egyszerre felküld -
+// akár első alkalommal (kód létrehozásakor), akár utólag, "mentsd le most mindet" gombbal
+function cloudPushAll() {
+  const keys = store.keys().filter((k) => k.indexOf("planner:") === 0 && k !== "planner:synccode" && k !== "planner:synctimestamps");
+  keys.forEach((k) => cloud.push(k, store.get(k)));
+  return keys.length;
+}
 
 function storeInit() {
   return new Promise((resolve) => {
@@ -4734,9 +4756,10 @@ function renderAcctWrap() {
       h += '<input class="inp" id="sync-code-show" readonly value="' + esc(cloud.code) + '" style="font-size:10.5px" onclick="this.select()">';
       h += '<button class="minibtn" data-act="sync-copy">Másolás</button>';
       h += '</div>';
+      h += '<button class="btn ghost" data-act="sync-pushall" style="width:100%;margin-bottom:10px">☁️ Összes adat feltöltése most</button>';
     } else {
-      h += '<div class="hint" style="margin-bottom:8px;line-height:1.4">Hozz létre egy kódot, hogy ezen az eszközön szerkesztett adatok automatikusan felkerüljenek a felhőbe.</div>';
-      h += '<button class="btn ghost" data-act="sync-create" style="width:100%;margin-bottom:10px">Szinkron-kód létrehozása</button>';
+      h += '<div class="hint" style="margin-bottom:8px;line-height:1.4">Hozz létre egy kódot, hogy ezen az eszközön szerkesztett adatok (naptár, kártyák, minden) automatikusan felkerüljenek a felhőbe.</div>';
+      h += '<button class="btn ghost" data-act="sync-create" style="width:100%;margin-bottom:10px">Szinkron-kód létrehozása + feltöltés</button>';
     }
     h += '<label class="lbl" style="margin:6px 0 6px">Másik eszköz kódjának megadása</label>';
     h += '<input class="inp" id="sync-code-input" placeholder="Illeszd be ide a kódot" value="' + esc(state.syncCodeDraft || "") + '" style="margin-bottom:8px">';
@@ -5866,10 +5889,14 @@ function handleAction(act) {
   if (act === "acct-logout") { logoutUser(); return; }
   if (act === "sync-create") {
     cloud.ensureCode();
-    // ami eddig csak helyben volt, azt is felküldjük egyszer
-    store.keys().forEach((k) => { if (k.indexOf("planner:") === 0 && k !== "planner:synccode" && k !== "planner:synctimestamps") cloud.push(k, store.get(k)); });
+    const n = cloudPushAll();
     render();
-    showToast("☁️ Szinkron-kód létrehozva, adataid feltöltés alatt");
+    showToast("☁️ Szinkron-kód létrehozva, " + n + " adat feltöltés alatt");
+    return;
+  }
+  if (act === "sync-pushall") {
+    const n = cloudPushAll();
+    showToast("☁️ " + n + " adat (naptár, kártyák, minden) feltöltés alatt a felhőbe...");
     return;
   }
   if (act === "sync-copy") {
