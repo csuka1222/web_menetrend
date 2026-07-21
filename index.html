@@ -1273,23 +1273,31 @@ const store = {
   db: null,
   ok: false,
   get(k) { return this.ok ? (this.cache.has(k) ? this.cache.get(k) : null) : localStorage.getItem(k); },
-  set(k, v) {
-    if (!this.ok) { localStorage.setItem(k, v); return; }
-    this.cache.set(k, String(v));
-    try {
-      const tx = this.db.transaction("kv", "readwrite");
-      tx.objectStore("kv").put(String(v), k);
-      tx.onerror = () => showToast("⚠️ A mentés nem jutott el a tárhelyre - készíts biztonsági mentést (Exportálás)!");
-    } catch (e) {
-      showToast("⚠️ A mentés nem jutott el a tárhelyre - készíts biztonsági mentést (Exportálás)!");
+  set(k, v, opts) {
+    opts = opts || {};
+    if (!this.ok) { localStorage.setItem(k, v); }
+    else {
+      this.cache.set(k, String(v));
+      try {
+        const tx = this.db.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(String(v), k);
+        tx.onerror = () => showToast("⚠️ A mentés nem jutott el a tárhelyre - készíts biztonsági mentést (Exportálás)!");
+      } catch (e) {
+        showToast("⚠️ A mentés nem jutott el a tárhelyre - készíts biztonsági mentést (Exportálás)!");
+      }
     }
+    if (!opts.noPush) cloud.push(k, v);
   },
-  remove(k) {
-    if (!this.ok) { localStorage.removeItem(k); return; }
-    this.cache.delete(k);
-    try {
-      this.db.transaction("kv", "readwrite").objectStore("kv").delete(k);
-    } catch (e) {}
+  remove(k, opts) {
+    opts = opts || {};
+    if (!this.ok) { localStorage.removeItem(k); }
+    else {
+      this.cache.delete(k);
+      try {
+        this.db.transaction("kv", "readwrite").objectStore("kv").delete(k);
+      } catch (e) {}
+    }
+    if (!opts.noPush) cloud.remove(k);
   },
   keys() {
     if (this.ok) return Array.from(this.cache.keys());
@@ -1298,6 +1306,85 @@ const store = {
     return a;
   },
 };
+
+// ---------- felhő-szinkron (Supabase) ----------
+// A fenti IndexedDB csak az adott böngészőn/eszközön él. Ha megadsz egy "szinkron-kódot"
+// egy másik eszközön is, minden mentés automatikusan felkerül/lekerül egy közös Supabase
+// táblából - nincs kézi export/import. FONTOS: nincs mögötte jelszavas bejelentkezés, maga
+// a kód a "jelszó" - úgy kell bánni vele, mint egy megosztható link jelszavával: senkinek
+// ne mutasd meg / ne oszd meg képernyőképen.
+const SUPABASE_URL = "https://wzmqvjjezmdewcajpigy.supabase.co";
+const SUPABASE_KEY = "sb_publishable_k065bXpA6GPTeHdyQHyLgA_rg4hbt6R";
+const SB_REST = SUPABASE_URL + "/rest/v1/planner_kv";
+const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+const cloud = {
+  code: null,
+  ts: {},          // key -> ezen az eszközön utoljára ISMERT módosítás ideje (a merge-hez)
+  timers: {},
+  init() {
+    try { this.code = localStorage.getItem("planner:synccode") || null; } catch (e) {}
+    try { this.ts = JSON.parse(localStorage.getItem("planner:synctimestamps") || "{}"); } catch (e) { this.ts = {}; }
+  },
+  ensureCode() {
+    if (!this.code) {
+      this.code = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      localStorage.setItem("planner:synccode", this.code);
+    }
+    return this.code;
+  },
+  setCode(code) {
+    this.code = code;
+    localStorage.setItem("planner:synccode", code);
+  },
+  saveTs(key, t) {
+    this.ts[key] = t;
+    try { localStorage.setItem("planner:synctimestamps", JSON.stringify(this.ts)); } catch (e) {}
+  },
+  // háttérben felküldi az adott kulcsot - nem blokkol, hiba esetén csendben elnyeli (offline is menjen az app)
+  push(key, value) {
+    if (!this.code) return;
+    const t = new Date().toISOString();
+    this.saveTs(key, t);
+    clearTimeout(this.timers[key]);
+    this.timers[key] = setTimeout(() => {
+      fetch(SB_REST, {
+        method: "POST",
+        headers: Object.assign({}, SB_HEADERS, { Prefer: "resolution=merge-duplicates,return=minimal" }),
+        body: JSON.stringify([{ sync_code: this.code, key, value: String(value), updated_at: t }]),
+      }).catch(() => {});
+    }, 500);
+  },
+  remove(key) {
+    if (!this.code) return;
+    fetch(SB_REST + "?sync_code=eq." + encodeURIComponent(this.code) + "&key=eq." + encodeURIComponent(key), {
+      method: "DELETE", headers: SB_HEADERS,
+    }).catch(() => {});
+  },
+  // letölti a felhőben tárolt összes kulcsot, és csak azokat írja felül helyben, amik
+  // a felhőben ÚJABBAK, mint amit ez az eszköz utoljára ismert (utolsó-írás-nyer)
+  async pullMerge() {
+    if (!this.code) return false;
+    let rows;
+    try {
+      const res = await fetch(SB_REST + "?sync_code=eq." + encodeURIComponent(this.code) + "&select=key,value,updated_at", { headers: SB_HEADERS });
+      if (!res.ok) return false;
+      rows = await res.json();
+    } catch (e) { return false; }
+    let changed = false;
+    rows.forEach((r) => {
+      const localT = this.ts[r.key];
+      if (!localT || new Date(r.updated_at) > new Date(localT)) {
+        store.set(r.key, r.value, { noPush: true });
+        this.saveTs(r.key, r.updated_at);
+        changed = true;
+      }
+    });
+    return changed;
+  },
+};
+cloud.init();
+
 function storeInit() {
   return new Promise((resolve) => {
     if (!window.indexedDB) { resolve(); return; }
@@ -1467,6 +1554,7 @@ const state = {
   userId: LEGACY_USER_ID,
   users: [],
   accountPanel: false,
+  syncCodeDraft: "",
   newUserName: "",
   weekOffset: 0,
   entries: [],
@@ -4638,6 +4726,22 @@ function renderAcctWrap() {
     h += '<input class="inp" id="acct-newname-panel" placeholder="Név" value="' + esc(state.newUserName || "") + '" style="margin-bottom:8px">';
     h += '<button class="btn ghost" data-act="acct-newuser" style="width:100%;margin-bottom:8px">Létrehozás</button>';
     h += '<button class="btn danger" data-act="acct-logout" style="width:100%">Kijelentkezés</button>';
+    h += '<div style="border-top:1px solid rgba(255,255,255,0.08);margin:12px 0 8px;padding-top:10px">';
+    h += '<label class="lbl" style="margin:0 0 6px">☁️ Szinkron másik eszközzel</label>';
+    if (cloud.code) {
+      h += '<div class="hint" style="margin-bottom:8px;line-height:1.4">Ez a kódod - ezt add meg a másik telefonon/gépen. Ne oszd meg senkivel, ez a "jelszavad".</div>';
+      h += '<div class="imgrow" style="margin-bottom:8px">';
+      h += '<input class="inp" id="sync-code-show" readonly value="' + esc(cloud.code) + '" style="font-size:10.5px" onclick="this.select()">';
+      h += '<button class="minibtn" data-act="sync-copy">Másolás</button>';
+      h += '</div>';
+    } else {
+      h += '<div class="hint" style="margin-bottom:8px;line-height:1.4">Hozz létre egy kódot, hogy ezen az eszközön szerkesztett adatok automatikusan felkerüljenek a felhőbe.</div>';
+      h += '<button class="btn ghost" data-act="sync-create" style="width:100%;margin-bottom:10px">Szinkron-kód létrehozása</button>';
+    }
+    h += '<label class="lbl" style="margin:6px 0 6px">Másik eszköz kódjának megadása</label>';
+    h += '<input class="inp" id="sync-code-input" placeholder="Illeszd be ide a kódot" value="' + esc(state.syncCodeDraft || "") + '" style="margin-bottom:8px">';
+    h += '<button class="btn ghost" data-act="sync-apply-panel" style="width:100%">Letöltés a felhőből</button>';
+    h += '</div>';
     h += '</div>';
   }
   h += '</div>';
@@ -4656,6 +4760,9 @@ function renderLoginGate() {
   html += '<label class="lbl" style="margin-top:4px;align-self:flex-start">+ Új felhasználó</label>';
   html += '<input class="inp" id="acct-newname-login" placeholder="Név" value="' + esc(state.newUserName || "") + '">';
   html += '<button class="btn ghost" data-act="acct-newuser" style="width:100%">Fiók létrehozása (' + STARTING_GOLD + ' 🪙 induló arannyal)</button>';
+  html += '<div class="hint" style="margin-top:10px">Már van fiókod egy másik eszközön?</div>';
+  html += '<input class="inp" id="sync-code-login" placeholder="Illeszd be ide a szinkron-kódot" value="' + esc(state.syncCodeDraft || "") + '">';
+  html += '<button class="btn ghost" data-act="sync-apply-login" style="width:100%">Csatlakozás a felhő-adatokhoz</button>';
   html += '</div></div></div>';
   app.innerHTML = html;
   bindEvents();
@@ -5397,6 +5504,13 @@ function bindEvents() {
     acctNameInp.onkeydown = (e) => { if (e.key === "Enter") createUser(acctNameInp.value); };
     acctNameInp.onclick = (e) => { e.stopPropagation(); };
   }
+  ["sync-code-input", "sync-code-login"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.oninput = () => { state.syncCodeDraft = el.value; };
+    el.onkeydown = (e) => { if (e.key === "Enter") handleAction(id === "sync-code-input" ? "sync-apply-panel" : "sync-apply-login"); };
+    el.onclick = (e) => { e.stopPropagation(); };
+  });
   document.onclick = () => {
     if (!state.accountPanel) return;
     state.accountPanel = false;
@@ -5750,6 +5864,35 @@ function syncSaveBtn() {
 function handleAction(act) {
   if (act === "acct-toggle") { state.accountPanel = !state.accountPanel; render(); return; }
   if (act === "acct-logout") { logoutUser(); return; }
+  if (act === "sync-create") {
+    cloud.ensureCode();
+    // ami eddig csak helyben volt, azt is felküldjük egyszer
+    store.keys().forEach((k) => { if (k.indexOf("planner:") === 0 && k !== "planner:synccode" && k !== "planner:synctimestamps") cloud.push(k, store.get(k)); });
+    render();
+    showToast("☁️ Szinkron-kód létrehozva, adataid feltöltés alatt");
+    return;
+  }
+  if (act === "sync-copy") {
+    const el = document.getElementById("sync-code-show");
+    if (el && el.value && navigator.clipboard) navigator.clipboard.writeText(el.value).then(() => showToast("Kód vágólapra másolva 📋")).catch(() => {});
+    return;
+  }
+  if (act === "sync-apply-panel" || act === "sync-apply-login") {
+    const inp = document.getElementById(act === "sync-apply-panel" ? "sync-code-input" : "sync-code-login");
+    const code = inp ? inp.value.trim() : "";
+    if (!code) { showToast("Add meg a kódot előbb 🙀"); return; }
+    cloud.setCode(code);
+    showToast("☁️ Letöltés a felhőből...");
+    cloud.pullMerge().then((changed) => {
+      loadUsers();
+      if (state.userId) loadUserData();
+      state.accountPanel = false;
+      state.syncCodeDraft = "";
+      render();
+      showToast(changed ? "☁️ Sikeres szinkron! Az adataid megérkeztek." : "☁️ Kód elmentve, minden naprakész.");
+    });
+    return;
+  }
   if (act === "acct-newuser") {
     const inp = document.getElementById("acct-newname-panel") || document.getElementById("acct-newname-login");
     createUser(inp ? inp.value : state.newUserName);
@@ -6158,6 +6301,18 @@ storeInit().then(() => {
   }
   render();
   if (state.userId) backfillGenres(); // régi steames bejegyzések műfajának pótlása a háttérben
+  // felhő-szinkron: ha van mentett szinkron-kód, induláskor csendben megnézzük,
+  // érkezett-e frissebb adat egy másik eszközről
+  if (cloud.code) {
+    cloud.pullMerge().then((changed) => {
+      if (changed) {
+        loadUsers();
+        if (state.userId) loadUserData();
+        render();
+        showToast("☁️ Szinkronizálva - friss adatok érkeztek egy másik eszközről");
+      }
+    });
+  }
 });
 </script>
 <script>
