@@ -6161,8 +6161,30 @@ storeInit().then(() => {
 });
 </script>
 <script>
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('service-worker.js');
+if ('serviceWorker' in navigator) {
+  let updateDetected = false;
+  navigator.serviceWorker.register('service-worker.js').then((reg) => {
+    // ha MÁR fut worker (tehát ez nem az első telepítés) és talál egy újabbat,
+    // az "updatefound" jelzi, hogy frissítés van folyamatban
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw || !navigator.serviceWorker.controller) return; // első telepítéskor ne jelezzen
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed') {
+          updateDetected = true;
+          showToast('✨ Új verzió érkezett, frissítés...');
+        }
+      });
+    });
+  });
+  // amint az új worker átveszi az irányítást (és ez tényleg frissítés volt, nem az első
+  // telepítés), egyszer újratöltjük az oldalt, hogy a friss fájlok érvénybe lépjenek
+  let swRefreshed = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshed || !updateDetected) return;
+    swRefreshed = true;
+    setTimeout(() => window.location.reload(), 1200);
+  });
 }
 </script>
 </body>
